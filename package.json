@@ -21,7 +21,7 @@
   },
   "homepage": "https://github.com/brunch/deps-install#readme",
   "devDependencies": {
-    "eslint": "^3.0.0",
+    "eslint": "^6.6.0",
     "eslint-config-brunch": "brunch/eslint-config-brunch"
   },
   "scripts": {

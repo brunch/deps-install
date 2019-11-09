@@ -1,6 +1,6 @@
 {
   "name": "deps-install",
-  "version": "0.2.0-pre",
+  "version": "0.2.0",
   "description": "Check if node_modules match package.json versions. npm / yarn install shortcut.",
   "main": "index.js",
   "files": [

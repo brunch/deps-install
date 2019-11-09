@@ -1,68 +1,130 @@
 'use strict';
-
-const exists = require('fs').existsSync;
+const fs = require('fs');
+const { resolve, join } = require('path');
 const cp = require('child_process');
-const join = require('path').join;
-const loggy = require('loggy');
-const promisify = require('micro-promisify');
+const { promisify } = require('util');
 const exec = promisify(cp.exec);
+const readdirp = require('readdirp');
+const semver = require('semver');
+const readFile = promisify(fs.readFile);
+
+const fsAccess = promisify(fs.access);
+async function exists(path) {
+  try {
+    await fsAccess(path);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+const readJSON = async path => {
+  const data = await readFile(path, 'utf-8');
+  const json = JSON.parse(data);
+  return json;
+};
+
+const readVersions = async (root, filterer) => {
+  const moduleRoot = join(root, 'node_modules');
+  const entries = await readdirp.promise(moduleRoot, {
+    fileFilter: 'package.json',
+    directoryFilter(entry) {
+      const dirName = entry.path.replace(moduleRoot, '');
+      return filterer.has(dirName);
+    },
+    depth: 1
+  });
+
+  const output = {};
+  for (const entry of entries) {
+    const path = join(moduleRoot, entry.path);
+    const data = await readJSON(path);
+    output[data.name] = data.version;
+  }
+  return output;
+};
+
+async function checkDeps(root, includeDevDeps = false) {
+  const pth = resolve(join(root, 'package.json'));
+  const pkg = await readJSON(pth);
+  const deps = pkg.dependencies || {};
+  if (includeDevDeps) {
+    const dev = pkg.devDependencies || {};
+    Object.assign(deps, dev);
+  }
+  const filterer = new Set(Object.keys(deps));
+  if (Object.keys(deps).length === 0) {
+    return [];
+  }
+  const installed = await readVersions(root, filterer);
+  const needUpdate = Object.keys(deps).filter(name => {
+    if (!installed.hasOwnProperty(name)) return true;
+    const range = deps[name];
+    const actualVer = installed[name];
+    // TODO: Better check for URLs. Maybe use private npm properties.
+    if (/\//.test(range)) return false;
+    // Skip check for version = latest.
+    if (range === 'latest') return false;
+    // e.g. semver('1.0.0', '^1')
+    if (semver.satisfies(actualVer, range)) return false;
+    return true;
+  });
+  return needUpdate;
+}
 
 // Force colors in `exec` outputs
 process.env.FORCE_COLOR = 'true';
 process.env.NPM_CONFIG_COLOR = 'always';
 
-const installed = cmd => {
+const _cache = {};
+function installed(cmd) {
+  if (cmd in _cache) {
+    return _cache[cmd];
+  }
   // shell: true must be set for this test to work on non *nixes.
-  return !cp.spawnSync(cmd, ['--version'], {shell: true}).error;
-};
+  // TODO: async version
+  _cache[cmd] = !cp.spawnSync(cmd, ['--version'], { shell: true }).error;
+  return _cache[cmd];
+}
 
-const getInstallCmd = {
-  package: rootPath => {
-    const pkgPath = join(rootPath, 'package.json');
-    if (!exists(pkgPath)) return;
+async function getInstallCmd(rootPath) {
+  const pkgPath = join(rootPath, 'package.json');
+  if (!(await exists(pkgPath))) return;
 
-    if (installed('yarn')) {
-      const lockPath = join(rootPath, 'yarn.lock');
-      if (exists(lockPath)) return 'yarn';
-    }
+  if (installed('yarn')) {
+    const lockPath = join(rootPath, 'yarn.lock');
+    if (await exists(lockPath)) return 'yarn';
+  }
 
-    if (installed('pnpm')) {
-      const lockPath = join(rootPath, 'shrinkwrap.yaml');
-      if (exists(lockPath)) return 'pnpm';
-    }
-    
-    return 'npm';
-  },
-  bower: rootPath => {
-    const bowerPath = join(rootPath, 'bower.json');
-    if (exists(bowerPath) && installed('bower')) return 'bower';
-  },
-};
+  if (installed('pnpm')) {
+    const lockPath = join(rootPath, 'shrinkwrap.yaml');
+    if (await exists(lockPath)) return 'pnpm';
+  }
 
-module.exports = options => {
-  if (options == null) options = {};
+  return 'npm';
+}
 
-  const rootPath = options.rootPath || '.';
-  const pkgType = [].concat(options.pkgType || []);
-  const logger = options.logger || loggy;
+async function installDeps(rootPath = '.', options = {}) {
+  const logger = options.logger || console;
   const env = process.env.NODE_ENV === 'production' ? '--production' : '';
 
   const prevDir = process.cwd();
-  process.chdir(rootPath);
+  if (rootPath !== '.') process.chdir(rootPath);
 
-  const execs = pkgType.map(type => {
-    const cmd = getInstallCmd[type](rootPath);
+  try {
+    const cmd = await getInstallCmd(rootPath);
     if (!cmd) return;
     logger.info(`Installing packages with ${cmd}...`);
-    return exec(`${cmd} install ${env}`);
-  });
-
-  return Promise.all(execs).then(() => {
-    process.chdir(prevDir);
-  }, error => {
-    process.chdir(prevDir);
+    await exec(`${cmd} install ${env}`);
+    return true;
+  } catch (error) {
     error.code = 'INSTALL_DEPS_FAILED';
     logger.error(error);
     throw error;
-  });
-};
+  } finally {
+    if (rootPath !== '.') process.chdir(prevDir);
+  }
+}
+
+exports.checkDeps = checkDeps;
+exports.installDeps = installDeps;

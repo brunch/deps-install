@@ -1,6 +1,6 @@
 'use strict';
 const fs = require('fs');
-const { resolve, join } = require('path');
+const { resolve, join, basename, dirname } = require('path');
 const cp = require('child_process');
 const { promisify } = require('util');
 const exec = promisify(cp.exec);
@@ -24,15 +24,19 @@ const readJSON = async path => {
   return json;
 };
 
-const readVersions = async (root, filterer) => {
+const AT = '@';
+
+const readVersions = async (root, filterer, namespaces) => {
   const moduleRoot = join(root, 'node_modules');
   const entries = await readdirp.promise(moduleRoot, {
     fileFilter: 'package.json',
     directoryFilter(entry) {
-      const dirName = entry.path.replace(moduleRoot, '');
-      return filterer.has(dirName);
+      if (entry.path.startsWith(AT) && entry.basename.startsWith(AT)) {
+        return namespaces.has(entry.basename);
+      }
+      return filterer.has(entry.path);
     },
-    depth: 1
+    depth: 2
   });
 
   const output = {};
@@ -52,11 +56,18 @@ async function checkDeps(root, includeDevDeps = false) {
     const dev = pkg.devDependencies || {};
     Object.assign(deps, dev);
   }
-  const filterer = new Set(Object.keys(deps));
+  const filterer = new Set();
+  const namespaces = new Set();
+  Object.keys(deps).forEach(dep => {
+    if (dep.startsWith(AT)) {
+      namespaces.add(dirname(dep));
+    }
+    filterer.add(dep);
+  });
   if (Object.keys(deps).length === 0) {
     return [];
   }
-  const installed = await readVersions(root, filterer);
+  const installed = await readVersions(root, filterer, namespaces);
   const needUpdate = Object.keys(deps).filter(name => {
     if (!installed.hasOwnProperty(name)) return true;
     const range = deps[name];

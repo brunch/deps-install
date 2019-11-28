@@ -109,7 +109,8 @@ async function getInstallCmd(rootPath) {
 
   if (installed('pnpm')) {
     const lockPath = join(rootPath, 'shrinkwrap.yaml');
-    if (await exists(lockPath)) return 'pnpm';
+    const lockPath2 = join(rootPath, 'pnpm-lock.yaml');
+    if (await exists(lockPath) || await exists(lockPath2)) return 'pnpm';
   }
 
   return 'npm';

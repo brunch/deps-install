@@ -1,6 +1,6 @@
 'use strict';
 const fs = require('fs');
-const { resolve, join, basename, dirname } = require('path');
+const { resolve, join, basename, dirname, sep } = require('path');
 const cp = require('child_process');
 const { promisify } = require('util');
 const exec = promisify(cp.exec);
@@ -34,7 +34,7 @@ const readVersions = async (root, filterer, namespaces) => {
       if (entry.path.startsWith(AT) && entry.basename.startsWith(AT)) {
         return namespaces.has(entry.basename);
       }
-      return filterer.has(entry.path);
+      return filterer.has(entry.path.replace(sep, '/'));
     },
     depth: 2
   });
